@@ -163,24 +163,116 @@ namespace gmm {
   /* BLAS functions used.                                                  */
   /* ********************************************************************* */
   extern "C" {
-    void daxpy_(const BLAS_INT *n, const double *alpha, const double *x,
-                const BLAS_INT *incx, double *y, const BLAS_INT *incy);
-    void saxpy_(...); /*void daxpy_(...);*/ void caxpy_(...); void zaxpy_(...);
-    void dgemm_(const char *tA, const char *tB, const BLAS_INT *m,
-                const BLAS_INT *n, const BLAS_INT *k, const BLAS_D *alpha,
-                const BLAS_D *A, const BLAS_INT *ldA, const BLAS_D *B,
-                const BLAS_INT *ldB, const BLAS_D *beta, BLAS_D *C,
-                const BLAS_INT *ldC);
-    void sgemm_(...); /*void dgemm_(...);*/ void cgemm_(...); void zgemm_(...);
-    void sgemv_(...); void dgemv_(...); void cgemv_(...); void zgemv_(...);
-    void strsv_(...); void dtrsv_(...); void ctrsv_(...); void ztrsv_(...);
-    BLAS_S sdot_ (...); BLAS_D ddot_ (...);
-    BLAS_C cdotu_(...); BLAS_Z zdotu_(...);
-    // Hermitian product in {c,z}dotc is defined in reverse order than usually
-    BLAS_C cdotc_(...); BLAS_Z zdotc_(...);
-    BLAS_S snrm2_(...); BLAS_D dnrm2_(...);
-    BLAS_S scnrm2_(...); BLAS_D dznrm2_(...);
-    void sger_(...); void dger_(...); void cgerc_(...); void zgerc_(...);
+    /* IMPORTANT: every function below MUST have a real, non-variadic       *
+     * prototype. A "(...)" declaration uses the variadic ABI, which on     *
+     * Darwin/arm64 differs from the non-variadic ABI (all args on stack,   *
+     * not in registers x0-x7). This causes EXC_BAD_ACCESS in libBLAS on    *
+     * Apple Silicon when the real implementation expects register-passed   *
+     * pointers. See gmm git history for details.                           */
+
+    /* y := alpha*x + y */
+    void saxpy_(const BLAS_INT *n, const BLAS_S *alpha, const BLAS_S *x,
+      const BLAS_INT *incx, BLAS_S *y, const BLAS_INT *incy);
+void daxpy_(const BLAS_INT *n, const BLAS_D *alpha, const BLAS_D *x,
+      const BLAS_INT *incx, BLAS_D *y, const BLAS_INT *incy);
+void caxpy_(const BLAS_INT *n, const BLAS_C *alpha, const BLAS_C *x,
+      const BLAS_INT *incx, BLAS_C *y, const BLAS_INT *incy);
+void zaxpy_(const BLAS_INT *n, const BLAS_Z *alpha, const BLAS_Z *x,
+      const BLAS_INT *incx, BLAS_Z *y, const BLAS_INT *incy);
+
+/* C := alpha*op(A)*op(B) + beta*C */
+#define GMM_BLAS_DECL_GEMM(name, T)                                          \
+void name(const char *tA, const char *tB,                                \
+    const BLAS_INT *m, const BLAS_INT *n, const BLAS_INT *k,       \
+    const T *alpha, const T *A, const BLAS_INT *ldA,               \
+    const T *B, const BLAS_INT *ldB,                               \
+    const T *beta, T *C, const BLAS_INT *ldC)
+GMM_BLAS_DECL_GEMM(sgemm_, BLAS_S);
+GMM_BLAS_DECL_GEMM(dgemm_, BLAS_D);
+GMM_BLAS_DECL_GEMM(cgemm_, BLAS_C);
+GMM_BLAS_DECL_GEMM(zgemm_, BLAS_Z);
+#undef GMM_BLAS_DECL_GEMM
+
+/* y := alpha*op(A)*x + beta*y */
+#define GMM_BLAS_DECL_GEMV(name, T)                                          \
+void name(const char *trans, const BLAS_INT *m, const BLAS_INT *n,       \
+    const T *alpha, const T *A, const BLAS_INT *ldA,               \
+    const T *x, const BLAS_INT *incx,                              \
+    const T *beta, T *y, const BLAS_INT *incy)
+GMM_BLAS_DECL_GEMV(sgemv_, BLAS_S);
+GMM_BLAS_DECL_GEMV(dgemv_, BLAS_D);
+GMM_BLAS_DECL_GEMV(cgemv_, BLAS_C);
+GMM_BLAS_DECL_GEMV(zgemv_, BLAS_Z);
+#undef GMM_BLAS_DECL_GEMV
+
+/* x := op(A)^{-1} x, A triangular */
+#define GMM_BLAS_DECL_TRSV(name, T)                                          \
+void name(const char *uplo, const char *trans, const char *diag,         \
+    const BLAS_INT *n, const T *A, const BLAS_INT *ldA,            \
+    T *x, const BLAS_INT *incx)
+GMM_BLAS_DECL_TRSV(strsv_, BLAS_S);
+GMM_BLAS_DECL_TRSV(dtrsv_, BLAS_D);
+GMM_BLAS_DECL_TRSV(ctrsv_, BLAS_C);
+GMM_BLAS_DECL_TRSV(ztrsv_, BLAS_Z);
+#undef GMM_BLAS_DECL_TRSV
+
+/* dot products. Real return-by-value is portable; complex return is    *
+* not (some BLAS impls return via hidden first arg). gmm exposes the   *
+* latter convention via GMM_BLAS_RETURN_COMPLEX_AS_ARGUMENT.           */
+BLAS_S sdot_(const BLAS_INT *n, const BLAS_S *x, const BLAS_INT *incx,
+       const BLAS_S *y, const BLAS_INT *incy);
+BLAS_D ddot_(const BLAS_INT *n, const BLAS_D *x, const BLAS_INT *incx,
+       const BLAS_D *y, const BLAS_INT *incy);
+#ifdef GMM_BLAS_RETURN_COMPLEX_AS_ARGUMENT
+void   cdotu_(BLAS_C *result, const BLAS_INT *n,
+        const BLAS_C *x, const BLAS_INT *incx,
+        const BLAS_C *y, const BLAS_INT *incy);
+void   zdotu_(BLAS_Z *result, const BLAS_INT *n,
+        const BLAS_Z *x, const BLAS_INT *incx,
+        const BLAS_Z *y, const BLAS_INT *incy);
+/* Hermitian product in {c,z}dotc is defined in reverse order than usually */
+void   cdotc_(BLAS_C *result, const BLAS_INT *n,
+        const BLAS_C *x, const BLAS_INT *incx,
+        const BLAS_C *y, const BLAS_INT *incy);
+void   zdotc_(BLAS_Z *result, const BLAS_INT *n,
+        const BLAS_Z *x, const BLAS_INT *incx,
+        const BLAS_Z *y, const BLAS_INT *incy);
+#else
+BLAS_C cdotu_(const BLAS_INT *n, const BLAS_C *x, const BLAS_INT *incx,
+        const BLAS_C *y, const BLAS_INT *incy);
+BLAS_Z zdotu_(const BLAS_INT *n, const BLAS_Z *x, const BLAS_INT *incx,
+        const BLAS_Z *y, const BLAS_INT *incy);
+/* Hermitian product in {c,z}dotc is defined in reverse order than usually */
+BLAS_C cdotc_(const BLAS_INT *n, const BLAS_C *x, const BLAS_INT *incx,
+        const BLAS_C *y, const BLAS_INT *incy);
+BLAS_Z zdotc_(const BLAS_INT *n, const BLAS_Z *x, const BLAS_INT *incx,
+        const BLAS_Z *y, const BLAS_INT *incy);
+#endif
+
+/* 2-norm */
+BLAS_S snrm2_ (const BLAS_INT *n, const BLAS_S *x, const BLAS_INT *incx);
+BLAS_D dnrm2_ (const BLAS_INT *n, const BLAS_D *x, const BLAS_INT *incx);
+BLAS_S scnrm2_(const BLAS_INT *n, const BLAS_C *x, const BLAS_INT *incx);
+BLAS_D dznrm2_(const BLAS_INT *n, const BLAS_Z *x, const BLAS_INT *incx);
+
+/* Rank-1 update: A := alpha*x*y' + A (ger) or A := alpha*x*y^H + A     *
+* (gerc). NOTE: A is `const T *` here only to match gmm's existing     *
+* call shape (its ger_interface macro reaches the call site with A     *
+* as `const T *`). The Fortran spec lists A as INTENT(IN OUT) and the  *
+* actual library symbol writes through this pointer; at the C ABI      *
+* level const is metadata only, so behavior is identical to the old    *
+* variadic decl. If gmm's ger_interface is ever cleaned up to pass     *
+* non-const, change this to `T *A` to match.                           */
+#define GMM_BLAS_DECL_GER(name, T)                                           \
+void name(const BLAS_INT *m, const BLAS_INT *n,                          \
+    const T *alpha, const T *x, const BLAS_INT *incx,              \
+    const T *y, const BLAS_INT *incy,                              \
+    const T *A, const BLAS_INT *ldA)
+GMM_BLAS_DECL_GER(sger_,  BLAS_S);
+GMM_BLAS_DECL_GER(dger_,  BLAS_D);
+GMM_BLAS_DECL_GER(cgerc_, BLAS_C);
+GMM_BLAS_DECL_GER(zgerc_, BLAS_Z);
+#undef GMM_BLAS_DECL_GER
   }
 
 
